@@ -75,14 +75,14 @@ data/
 ```
 ds6050_team3_ablationstudy/
 ├── current code files/
-│   ├── isic2019_dataset_v3.py        # Dataset class: image loading, metadata encoding, train/test splits
-│   ├── equilibration_sampler_v2.py   # EM sampler: class-balanced mini-batch construction
-│   ├── metablockv2.py                # MetaBlock: metadata-driven feature map modulation
-│   ├── model_v3.py                   # SkinEffnetB5: EfficientNet-B5 with optional MetaBlock and transfer learning
-│   ├── dataloader_v3.py              # DataLoader construction with optional EM sampling
-│   ├── runner.py                     # Main training/evaluation script (CLI-driven experiment configs)
-│   ├── tune_paramsv4.ipynb           # Optuna hyperparameter optimization
-│   └── data_investigation_v2.ipynb   # Exploratory data analysis
+│   ├── isic2019_dataset.py        # Dataset class: image loading, metadata encoding, train/test splits
+│   ├── equilibration_sampler.py   # EM sampler: class-balanced mini-batch construction
+│   ├── metablock.py               # MetaBlock: metadata-driven feature map modulation
+│   ├── model.py                   # SkinEffnetB5: EfficientNet-B5 with optional MetaBlock and transfer learning
+│   ├── dataloader.py              # DataLoader construction with optional EM sampling
+│   ├── runner.py                  # Main training/evaluation script (CLI-driven experiment configs)
+│   ├── tune_params.py             # Optuna hyperparameter optimization
+│   └── data_investigation.ipynb   # Exploratory data analysis
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -90,19 +90,19 @@ ds6050_team3_ablationstudy/
 
 ## Module Descriptions
 
-### `isic2019_dataset_v3.py`
+### `isic2019_dataset.py`
 PyTorch `Dataset` that loads ISIC 2019 images with integer class labels and one-hot encoded metadata. Metadata is encoded as a 15-dimensional vector: 6 dims for age (5 brackets + unknown), 3 dims for sex (female, male, unknown), and 6 dims for anatomical site (5 grouped regions + unknown). Each metadata field has an explicit unknown flag so that missingness is a learnable signal rather than an implicit all-zeros pattern.
 
-### `equilibration_sampler_v2.py`
+### `equilibration_sampler.py`
 Custom PyTorch `Sampler` implementing the equilibration mini-batch strategy from [Ya-Guan et al. (2020)](https://ieeexplore.ieee.org/document/9055020). Given batch size `m` and `K=8` classes, each mini-batch contains exactly `Q = m/K` samples per class. Classes with more than `Q` available samples are undersampled (without replacement); classes with fewer are oversampled (all real samples included first, then remainder filled with replacement). Epoch length is anchored on the largest class to ensure coverage.
 
-### `metablockv2.py`
+### `metablock.py`
 Implementation of the Metadata Processing Block from [Pacheco and Krohling (2021)](https://ieeexplore.ieee.org/document/9364366). Applies learned scale (`f_b`) and shift (`g_b`) transformations — conditioned on patient metadata — to CNN feature map groups using the gating equation: `x̃ = σ[tanh(f_b(x_meta) ⊙ x_img) + g_b(x_meta)]`.
 
-### `model_v3.py`
+### `model.py`
 Wraps EfficientNet-B5 with configurable transfer learning (ImageNet pretrained vs. random init), optional MetaBlock integration, and a replaceable classification head. The original classifier is removed and replaced with a linear layer for 8-class output. When MetaBlock is active, the 2,048-channel feature maps are reshaped into 32 groups before metadata modulation.
 
-### `dataloader_v3.py`
+### `dataloader.py`
 Constructs train/validation `DataLoader` pairs from an 80/20 index split. Handles the toggle between standard random sampling and EM sampling. The validation split always uses the test transform (resize + normalize, no augmentation).
 
 ### `runner.py`
@@ -122,7 +122,7 @@ python runner.py -c SCRATCH       # Baseline only (no flags)
 
 Loads best hyperparameters from a pre-computed Optuna SQLite database, trains with early stopping (patience=5 on validation macro recall), and logs all metrics to Weights & Biases.
 
-### `tune_paramsv4.ipynb`
+### `tune_params.py`
 Optuna hyperparameter search over learning rate, weight decay, batch size (multiples of 8), and LR scheduler (cosine vs. step). Runs 50 trials with median pruning after 5 warmup epochs. Saves results to SQLite for retrieval by `runner.py`. Two separate studies are maintained: one for transfer learning conditions, one for scratch conditions.
 
 ## Environment and Dependencies
