@@ -1,4 +1,4 @@
-# Ablation Study of Equilibration Mini-Batch Sampling, Transfer Learning, and Metadata Fusion with EfficientNet-B5 for Skin Lesion Classification
+# Ablation Study of Equilibration Mini-Batch Sampling, Transfer Learning, and Metadata Fusion with EfficientNet-B4 for Skin Lesion Classification
 
 **DS 6050 — Deep Learning | University of Virginia, School of Data Science | Spring 2026**
 
@@ -15,17 +15,32 @@ The ISIC 2019 dataset presents two core challenges: severe class imbalance (the 
 | Technique | Level | Purpose |
 |---|---|---|
 | EM Sampling | Data | Balances each mini-batch so every class receives equal representation, counteracting gradient dominance by majority classes |
-| Transfer Learning | Architecture (weights) | Initializes EfficientNet-B5 with ImageNet-pretrained weights to compensate for limited training data |
+| Transfer Learning | Architecture (weights) | Initializes EfficientNet-B4 with ImageNet-pretrained weights to compensate for limited training data |
 | MetaBlock | Architecture (features) | Uses patient metadata (age, sex, anatomical site) to modulate CNN feature maps via a learned attention mechanism |
 
 The ablation study uses a **2 × 4 design** across 8 experiments:
 
 | Experiment | Track 1 (Baseline) | Track 2 (Transfer Learning) |
 |---|---|---|
-| Foundation | EfficientNet-B5 from scratch | EfficientNet-B5 + ImageNet weights |
+| Foundation | EfficientNet-B4 from scratch | EfficientNet-B4 + ImageNet weights |
 | + EM Sampling | EM | TL + EM |
 | + MetaBlock | MetaBlock | TL + MetaBlock |
 | + Both | EM + MetaBlock | TL + EM + MetaBlock |
+
+> **Note on architecture choice:** The original proposal specified EfficientNet-B5 (30M parameters, 456×456 input). During development, higher batch sizes caused out-of-memory errors on Rivanna A40 GPUs, so the architecture was changed to EfficientNet-B4 (19M parameters, 380×380 input). B4 has strong literature support for skin lesion classification (Pham et al., 2020) and the reduced parameter count is better suited to the 25K-image dataset.
+
+## Baseline Results (Milestone 2)
+
+Two baseline models have been trained and evaluated on the ISIC 2019 test set (UNK class excluded):
+
+| Model | Val MAR | Test MAR | Early Stopping |
+|---|---|---|---|
+| B4 Scratch | 0.515 | 0.377 | Not triggered (30 epochs) |
+| B4 Transfer Learning | 0.784 | 0.549 | Epoch 22 (best weights from epoch 12) |
+
+Transfer learning improves test macro recall by 45% over the scratch baseline. The scratch model exhibits severe overfitting (train loss → 0.1, val loss → 1.4), while the TL model shows moderate overfitting mitigated by pretrained weight stability. Per-class recall improvements from TL are most dramatic for rare classes: DF (0.15 → 0.40), BKL (0.24 → 0.51), SCC (0.24 → 0.43), VASC (0.23 → 0.39).
+
+Detailed training curves, confusion matrices, and per-class AUC tables are logged to Weights & Biases.
 
 ## Dataset Setup
 
@@ -75,14 +90,16 @@ data/
 ```
 ds6050_team3_ablationstudy/
 ├── current code files/
-│   ├── isic2019_dataset.py        # Dataset class: image loading, metadata encoding, train/test splits
-│   ├── equilibration_sampler.py   # EM sampler: class-balanced mini-batch construction
-│   ├── metablock.py               # MetaBlock: metadata-driven feature map modulation
-│   ├── model.py                   # SkinEffnetB5: EfficientNet-B5 with optional MetaBlock and transfer learning
-│   ├── dataloader.py              # DataLoader construction with optional EM sampling
-│   ├── runner.py                  # Main training/evaluation script (CLI-driven experiment configs)
-│   ├── tune_params.py             # Optuna hyperparameter optimization
-│   └── data_investigation.ipynb   # Exploratory data analysis
+│   ├── isic2019_dataset.py          # Dataset class: image loading, metadata encoding, train/test splits
+│   ├── equilibration_sampler.py     # EM sampler: class-balanced mini-batch construction
+│   ├── metablock.py                 # MetaBlock: metadata-driven feature map modulation
+│   ├── model.py                     # SkinEffnetB4: EfficientNet-B4 with optional MetaBlock and transfer learning
+│   ├── dataloader.py                # DataLoader construction with optional EM sampling
+│   ├── runner.py                    # Main training/evaluation script (CLI-driven experiment configs)
+│   ├── tune_params.py               # Optuna hyperparameter optimization (with AMP mixed precision)
+│   ├── data_investigation.ipynb     # Exploratory data analysis
+│   ├── confusion_matrices.ipynb     # Confusion matrix generation and visualization
+│   └── test_em_sampler.ipynb        # EM sampler verification tests
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -91,43 +108,82 @@ ds6050_team3_ablationstudy/
 ## Module Descriptions
 
 ### `isic2019_dataset.py`
-PyTorch `Dataset` that loads ISIC 2019 images with integer class labels and one-hot encoded metadata. Metadata is encoded as a 15-dimensional vector: 6 dims for age (5 brackets + unknown), 3 dims for sex (female, male, unknown), and 6 dims for anatomical site (5 grouped regions + unknown). Each metadata field has an explicit unknown flag so that missingness is a learnable signal rather than an implicit all-zeros pattern.
+PyTorch `Dataset` that loads ISIC 2019 images with integer class labels and one-hot encoded metadata. Metadata is encoded as a 15-dimensional vector: 6 dims for age (5 brackets + unknown), 3 dims for sex (female, male, unknown), and 6 dims for anatomical site (5 grouped regions + unknown). Each metadata field has an explicit unknown flag so that missingness is a learnable signal rather than an implicit all-zeros pattern. Images are resized to 380×380 for EfficientNet-B4 and normalized using ImageNet statistics.
 
 ### `equilibration_sampler.py`
-Custom PyTorch `Sampler` implementing the equilibration mini-batch strategy from [Ya-Guan et al. (2020)](https://ieeexplore.ieee.org/document/9055020). Given batch size `m` and `K=8` classes, each mini-batch contains exactly `Q = m/K` samples per class. Classes with more than `Q` available samples are undersampled (without replacement); classes with fewer are oversampled (all real samples included first, then remainder filled with replacement). Epoch length is anchored on the largest class to ensure coverage.
+Custom PyTorch `Sampler` implementing the equilibration mini-batch strategy from [Ya-Guan et al. (2020)](https://ieeexplore.ieee.org/document/9055020). Given batch size `m` and `K=8` classes, each mini-batch contains exactly `Q = m/K` samples per class. Classes with more than `Q` available samples are undersampled (without replacement); classes with fewer are oversampled (all real samples included first, then remainder filled with replacement). Epoch length is anchored on the largest class to ensure coverage. Includes a `class_summary()` diagnostic and batch-level logging utility for verification.
 
 ### `metablock.py`
-Implementation of the Metadata Processing Block from [Pacheco and Krohling (2021)](https://ieeexplore.ieee.org/document/9364366). Applies learned scale (`f_b`) and shift (`g_b`) transformations — conditioned on patient metadata — to CNN feature map groups using the gating equation: `x̃ = σ[tanh(f_b(x_meta) ⊙ x_img) + g_b(x_meta)]`.
+Implementation of the Metadata Processing Block from [Pacheco and Krohling (2021)](https://ieeexplore.ieee.org/document/9364366). Applies learned scale (`f_b`) and shift (`g_b`) transformations — conditioned on patient metadata — to CNN feature map groups using the gating equation: `x̃ = σ[tanh(f_b(x_meta) ⊙ x_img) + g_b(x_meta)]`. Each branch is a single linear layer with batch normalization.
 
 ### `model.py`
-Wraps EfficientNet-B5 with configurable transfer learning (ImageNet pretrained vs. random init), optional MetaBlock integration, and a replaceable classification head. The original classifier is removed and replaced with a linear layer for 8-class output. When MetaBlock is active, the 2,048-channel feature maps are reshaped into 32 groups before metadata modulation.
+Wraps EfficientNet-B4 with configurable modes:
+- `pretrained=True/False`: ImageNet weights vs. random initialization
+- `feature_extract=True/False`: frozen backbone vs. full fine-tuning
+- `use_metablock=True/False`: with or without MetaBlock metadata fusion
+- `dropout_p`: dropout rate on the final FC layer (0.0 for TL, 0.5 for scratch)
+
+The backbone outputs 1,792 channels which are reshaped into 32 groups of 56 channels each when MetaBlock is active. The original classifier is replaced with a linear layer for 8-class output.
 
 ### `dataloader.py`
-Constructs train/validation `DataLoader` pairs from an 80/20 index split. Handles the toggle between standard random sampling and EM sampling. The validation split always uses the test transform (resize + normalize, no augmentation).
+Constructs train/validation `DataLoader` pairs from an 80/20 index split. Handles the toggle between standard random sampling and EM sampling via the `use_equilibration` flag. The validation split uses the test transform (resize + normalize only). Uses `drop_last=True` to ensure consistent batch sizes.
 
 ### `runner.py`
 Main entry point for running experiments. Uses CLI flags to configure experiment conditions:
 
 ```bash
-# Examples:
-python runner.py -c TL            # Transfer learning only
-python runner.py -c TL_EM         # Transfer learning + EM sampling
-python runner.py -c TL_META       # Transfer learning + MetaBlock
-python runner.py -c TL_EM_META    # Transfer learning + EM + MetaBlock
-python runner.py -c EM            # Baseline + EM sampling
-python runner.py -c META          # Baseline + MetaBlock
-python runner.py -c EM_META       # Baseline + EM + MetaBlock
-python runner.py -c SCRATCH       # Baseline only (no flags)
+# Track 1 (scratch) experiments:
+python runner.py -c SCRATCH           # Baseline from scratch
+python runner.py -c EM                # Scratch + EM sampling
+python runner.py -c META              # Scratch + MetaBlock
+python runner.py -c EM_META           # Scratch + EM + MetaBlock
+
+# Track 2 (transfer learning) experiments:
+python runner.py -c TL                # Transfer learning baseline
+python runner.py -c TL_EM             # TL + EM sampling
+python runner.py -c TL_META           # TL + MetaBlock
+python runner.py -c TL_EM_META        # TL + EM + MetaBlock
 ```
 
-Loads best hyperparameters from a pre-computed Optuna SQLite database, trains with early stopping (patience=5 on validation macro recall), and logs all metrics to Weights & Biases.
+Loads best hyperparameters from a pre-computed Optuna SQLite database, trains with early stopping (patience=10 on validation macro recall), saves best model weights to disk, and logs all metrics including a test-set confusion matrix to Weights & Biases.
 
 ### `tune_params.py`
-Optuna hyperparameter search over learning rate, weight decay, batch size (multiples of 8), and LR scheduler (cosine vs. step). Runs 50 trials with median pruning after 5 warmup epochs. Saves results to SQLite for retrieval by `runner.py`. Two separate studies are maintained: one for transfer learning conditions, one for scratch conditions.
+Optuna hyperparameter search over learning rate (1e-5 to 1e-2, log scale), weight decay (1e-5 to 1e-2, log scale), batch size ({16, 24, 32, 48, 64}), and LR scheduler (cosine vs. step with step_size=10). Runs 40 trials with median pruning after 5 warmup epochs. Uses mixed precision training (AMP) with `GradScaler` to reduce VRAM usage. Includes memory management (explicit `gc.collect()` and `torch.cuda.empty_cache()` between trials) and catches OOM errors gracefully. Saves results to SQLite databases (`optuna_TL.db`, `optuna_SCRATCH.db`) for retrieval by `runner.py`.
 
-## Environment and Dependencies
+## Running on Rivanna
 
-This project runs on UVA's Rivanna HPC cluster using GPU nodes. Key dependencies:
+This project runs on UVA's Rivanna HPC cluster. Request A100 GPUs for reliable execution:
+
+```bash
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1
+```
+
+### Execution order
+
+1. **Hyperparameter tuning** (once per track):
+   ```bash
+   python tune_params.py -c TL        # Tunes for transfer learning track
+   python tune_params.py -c SCRATCH   # Tunes for scratch track
+   ```
+
+2. **Baseline training** (Milestone 2):
+   ```bash
+   python runner.py -c TL             # Transfer learning baseline
+   python runner.py -c SCRATCH        # Scratch baseline
+   ```
+
+3. **Ablation experiments** (Milestone 3):
+   ```bash
+   python runner.py -c TL_EM          # TL + EM sampling
+   python runner.py -c TL_META        # TL + MetaBlock
+   python runner.py -c TL_EM_META     # TL + EM + MetaBlock
+   python runner.py -c EM             # Scratch + EM
+   python runner.py -c META           # Scratch + MetaBlock
+   python runner.py -c EM_META        # Scratch + EM + MetaBlock
+   ```
+
+## Dependencies
 
 - Python 3.10+
 - PyTorch 2.x (with CUDA)
@@ -139,9 +195,9 @@ This project runs on UVA's Rivanna HPC cluster using GPU nodes. Key dependencies
 
 ## Evaluation Metrics
 
-The primary evaluation metric is **macro recall** (equivalent to balanced accuracy), which weights all 8 classes equally regardless of sample count. This follows the ISIC 2019 challenge convention. Per-class AUC (one-vs-rest) is tracked as a secondary metric to monitor performance on individual classes, particularly the rare ones (VASC, DF, SCC).
+The primary evaluation metric is **macro-averaged recall (MAR)**, equivalent to balanced accuracy, which weights all 8 classes equally regardless of sample count. This follows the ISIC 2019 challenge convention. Per-class AUC (one-vs-rest) is tracked as a secondary metric to monitor performance on individual classes, particularly the rare ones (VASC, DF, SCC).
 
-All training and evaluation metrics are logged to [Weights & Biases](https://wandb.ai/) under the project `ds6050-g03-ISIC2019`.
+All training and evaluation metrics are logged to [Weights & Biases](https://wandb.ai/) under the `ds6050_team3` entity.
 
 ## References
 
@@ -150,10 +206,11 @@ All training and evaluation metrics are logged to [Weights & Biases](https://wan
 - Hasan, S. M. et al. (2023). "Enhancing Multi-Class Skin Lesion Classification with Modified EfficientNets." *ICICT4SD*, 94–98.
 - Pan, S. J. & Yang, Q. (2010). "A Survey on Transfer Learning." *IEEE TKDE*, 22(10), 1345–1359.
 - Tan, M. & Le, Q. V. (2019). "EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks." *ICML*.
-- Kassem, M. A. et al. (2020). "Skin Lesions Classification Into Eight Classes for ISIC 2019 Using Deep Convolutional Neural Network and Transfer Learning." *IEEE Access*, 8, 114822–114832.
 - Pham, T. C. et al. (2020). "Improving Skin-Disease Classification Based on Customized Loss Function Combined With Balanced Mini-Batch Logic and Real-Time Image Augmentation." *IEEE Access*, 8, 150725–150737.
+- Kassem, M. A. et al. (2020). "Skin Lesions Classification Into Eight Classes for ISIC 2019 Using Deep Convolutional Neural Network and Transfer Learning." *IEEE Access*, 8, 114822–114832.
 - Liu, Y. et al. (2017). "Detecting Cancer Metastases on Gigapixel Pathology Images." *arXiv:1703.02442*.
 - Unnisa, Z. et al. (2025). "Impact of Fine-Tuning Parameters of Convolutional Neural Network for Skin Cancer Detection." *Scientific Reports*, 15(1), 14779.
+- Guo, C. et al. (2017). "On Calibration of Modern Neural Networks." *ICML*.
 
 ## License
 
