@@ -113,6 +113,7 @@ Notes
 import math
 import random
 import warnings
+import torch
 from collections import defaultdict
 from typing import Iterator, List
 
@@ -339,49 +340,49 @@ class EquilibrationSampler(Sampler):
     # ------------------------------------------------------------------
     # Logging utility for batches
     # ------------------------------------------------------------------
-
+    @staticmethod
     def log_batch_class_distribution(
             labels: torch.Tensor,
             num_classes: int,
             batch_idx: int,
             log_every_n: int = 50,
     ) -> None:
-    """
-    Logs the class count distribution for a single batch. Intended to be
-    called inside the training loop to verify that the EquilibrationSampler
-    is producing balanced batches as expected.
+        """
+        Logs the class count distribution for a single batch. Intended to be
+        called inside the training loop to verify that the EquilibrationSampler
+        is producing balanced batches as expected.
 
-    Every batch should show exactly Q = batch_size // num_classes samples
-    per class. Any deviation indicates a problem with sampler configuration
-    or DataLoader settings (e.g. drop_last=False producing a partial batch).
+        Every batch should show exactly Q = batch_size // num_classes samples
+        per class. Any deviation indicates a problem with sampler configuration
+        or DataLoader settings (e.g. drop_last=False producing a partial batch).
 
-    Args:
-        labels (torch.Tensor):
-            The integer label tensor for the current batch, shape [B].
-            This is the second element returned by ISICSkinDataset.__getitem__,
-            i.e. the 'labels' variable in a typical training loop.
-        num_classes (int):
-            Total number of classes. Should match the value passed to
-            EquilibrationSampler at construction (8 for ISIC 2019).
-        batch_idx (int):
-            The current batch index within the epoch, used for log output
-            and to control how often logging fires.
-        log_every_n (int):
-            Log every N batches to avoid flooding output during training.
-            Set to 1 to log every single batch (useful for initial debugging),
-            or a larger value for periodic spot-checks during normal training.
-    """
-    if batch_idx % log_every_n != 0:
-        return
+        Args:
+            labels (torch.Tensor):
+                The integer label tensor for the current batch, shape [B].
+                This is the second element returned by ISICSkinDataset.__getitem__,
+                i.e. the 'labels' variable in a typical training loop.
+            num_classes (int):
+                Total number of classes. Should match the value passed to
+                EquilibrationSampler at construction (8 for ISIC 2019).
+            batch_idx (int):
+                The current batch index within the epoch, used for log output
+                and to control how often logging fires.
+            log_every_n (int):
+                Log every N batches to avoid flooding output during training.
+                Set to 1 to log every single batch (useful for initial debugging),
+                or a larger value for periodic spot-checks during normal training.
+        """
+        if batch_idx % log_every_n != 0:
+            return
 
-    counts = torch.bincount(labels, minlength=num_classes)
-    expected_q = len(labels) // num_classes
-    is_balanced = all(c == expected_q for c in counts.tolist())
+        counts = torch.bincount(labels, minlength=num_classes)
+        expected_q = len(labels) // num_classes
+        is_balanced = all(c == expected_q for c in counts.tolist())
 
-    lines = [f"\n  Batch {batch_idx} class distribution (balanced={is_balanced}):"]
-    for cls_idx, count in enumerate(counts.tolist()):
-        deviation = count - expected_q
-        deviation_str = f"  <-- WARNING: expected {expected_q}" if deviation != 0 else ""
-        lines.append(f"    class {cls_idx:>2}: {count:>4} samples{deviation_str}")
-    lines.append(f"  Total: {len(labels)} samples, expected Q={expected_q} per class")
-    print("\n".join(lines))
+        lines = [f"\n  Batch {batch_idx} class distribution (balanced={is_balanced}):"]
+        for cls_idx, count in enumerate(counts.tolist()):
+            deviation = count - expected_q
+            deviation_str = f"  <-- WARNING: expected {expected_q}" if deviation != 0 else ""
+            lines.append(f"    class {cls_idx:>2}: {count:>4} samples{deviation_str}")
+        lines.append(f"  Total: {len(labels)} samples, expected Q={expected_q} per class")
+        print("\n".join(lines))

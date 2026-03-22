@@ -7,7 +7,7 @@ Includes ability to:
   - Download images and CSVs via the isic-cli tool
   - Create an ISICSkinDataset: a PyTorch Dataset that loads images, integer class labels,
     and one-hot encoded metadata (age, sex, anatomical site) for use with
-    SkinEffnetB5 (with or without MetaBlock).
+    SkinEffnetB4 (with or without MetaBlock).
 
 ---------------------------------------------------------------------------
 DOWNLOAD INSTRUCTIONS FOR DATA
@@ -61,7 +61,7 @@ META_DIM = 15, composed of three groups, each with an explicit unknown flag:
         [13]  other      (oral/genital, palms/soles)
         [14]  site_unknown  <- 1 if anatom_site_general is missing, 0 otherwise
 
-    Total vector length: 6 + 3 + 6 = 15  ->  set meta_num=15 in SkinEffnetB5.
+    Total vector length: 6 + 3 + 6 = 15  ->  set meta_num=15 in SkinEffnetB4.
 
     The unknown flags make missingness an explicit, learnable signal rather
     than an implicit all-zeros pattern. This is important because ~11.5% of
@@ -142,27 +142,27 @@ AGE_OFFSET  = 0                          # dims  0-5
 SEX_OFFSET  = AGE_OFFSET  + N_AGE_DIMS  # dims  6-8
 SITE_OFFSET = SEX_OFFSET  + N_SEX_DIMS  # dims  9-14
 
-# Total metadata vector length: must match meta_num in SkinEffnetB5.
+# Total metadata vector length: must match meta_num in SkinEffnetB4.
 META_DIM = N_AGE_DIMS + N_SEX_DIMS + N_SITE_DIMS  # 6 + 3 + 6 = 15
 
 # ---------------------------------------------------------------------------
 # Default image transforms
 # ---------------------------------------------------------------------------
 
-# EfficientNet-B5 expects 456x456 inputs. Resizing and normalization occurs using
+# EfficientNet-B4 expects 380x380 inputs. Resizing and normalization occurs using
 # ImageNet statistics. No augmentation is applied here; augmentation 
 # can be added via the transform argument when constructing ISICSkinDataset if needed.
-EFFNET_B5_INPUT_SIZE = 456
+EFFNET_B4_INPUT_SIZE = 380
 
 DEFAULT_TRAIN_TRANSFORM = transforms.Compose([
-    transforms.Resize((EFFNET_B5_INPUT_SIZE, EFFNET_B5_INPUT_SIZE)),
+    transforms.Resize((EFFNET_B4_INPUT_SIZE, EFFNET_B4_INPUT_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],   # ImageNet stats
                          std=[0.229, 0.224, 0.225]),
 ])
 
 DEFAULT_TEST_TRANSFORM = transforms.Compose([
-    transforms.Resize((EFFNET_B5_INPUT_SIZE, EFFNET_B5_INPUT_SIZE)),
+    transforms.Resize((EFFNET_B4_INPUT_SIZE, EFFNET_B4_INPUT_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225]),
@@ -267,7 +267,7 @@ class ISICSkinDataset(Dataset):
             Path to the metadata CSV (uses 'isic_id' column as the image
             key). If None, meta_data will be returned as None from
             __getitem__, which is incompatible with use_metablock=True
-            in SkinEffnetB5.
+            in SkinEffnetB4.
         transform (callable | None):
             Torchvision transform applied to each PIL image. Defaults to
             DEFAULT_TRAIN_TRANSFORM when train=True, DEFAULT_TEST_TRANSFORM
@@ -348,7 +348,7 @@ class ISICSkinDataset(Dataset):
         else:
             warnings.warn(
                 "metadata_csv is None. meta_data will be returned as None from "
-                "__getitem__. This is incompatible with use_metablock=True in SkinEffnetB5."
+                "__getitem__. This is incompatible with use_metablock=True in SkinEffnetB4."
             )
             meta_df = None
 

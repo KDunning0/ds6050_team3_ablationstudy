@@ -4,9 +4,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import numpy as np
-from isic2019_dataset_v3 import get_test_dataset
-from model import SkinEffnetB5
-from dataloader_v3 import set_up,make_loaders
+from isic2019_dataset import get_test_dataset
+from model import SkinEffnetB4
+from dataloader import set_up,make_loaders
 import optuna
 # This is how we'll avoid having 8 different files.
 import argparse
@@ -71,7 +71,7 @@ def evaluate(model, dataloader, criterion, device, use_META = use_META):
 
     epoch_loss = running_loss / len(dataloader)
     
-    return epoch_loss, m_recall, auc_by_class
+    return epoch_loss, m_recall, auc_by_class, preds, labs
 
 
 def _set_bn_eval(m):
@@ -123,15 +123,33 @@ def train_model(device, model, train_loader, val_loader, lr, weight_decay,
     best_m_recall = 0.0
     patience_count = 0
     # The number of epochs to wait before early stopping.  Can change.
-    patience = 5
+    patience = 10
+    # Initializing best weights incase there is never an improvement
+    best_weights = copy.deepcopy(model.state_dict())
 
     for epoch in range(num_epochs):
 
         train_loss = train_epoch(
             model, train_loader, criterion, optimizer, device, feature_extract = use_feat_ext, use_META = use_META
         )
-        epoch_loss, m_recall, auc_by_class = evaluate(model, val_loader, criterion, device, use_META=use_META)
+        epoch_loss, m_recall, auc_by_class, _, _ = evaluate(model, val_loader, criterion, device, use_META=use_META)
 
+        wandb.log({
+        "train_loss": train_loss,
+        "val_loss": epoch_loss,
+        "val_m_recall": m_recall,
+        "val_mean_auc": auc_by_class.mean(),
+        "val_auc_class_0_MEL": auc_by_class[0],
+        "val_auc_class_1_NV": auc_by_class[1],
+        "val_auc_class_2_BCC": auc_by_class[2],
+        "val_auc_class_3_AK": auc_by_class[3],
+        "val_auc_class_4_BKL": auc_by_class[4],
+        "val_auc_class_5_DF": auc_by_class[5],
+        "val_auc_class_6_VASC": auc_by_class[6],
+        "val_auc_class_7_SCC": auc_by_class[7],
+        "epoch": epoch
+        })
+        
         # Early stopping mechanism
         if m_recall > best_m_recall:
             best_m_recall = m_recall
@@ -143,25 +161,10 @@ def train_model(device, model, train_loader, val_loader, lr, weight_decay,
                 print(f"Early stopping at epoch {epoch}")
                 break
 
-        wandb.log({
-        "train_loss": train_loss,
-        "val_loss": epoch_loss,
-        "val_m_recall": m_recall,
-        "val_mean_auc": auc_by_class.mean(),
-        "auc_class_0_MEL": auc_by_class[0],
-        "auc_class_1_NV": auc_by_class[1],
-        "auc_class_2_BCC": auc_by_class[2],
-        "auc_class_3_AK": auc_by_class[3],
-        "auc_class_4_BKL": auc_by_class[4],
-        "auc_class_5_DF": auc_by_class[5],
-        "auc_class_6_VASC": auc_by_class[6],
-        "auc_class_7_SCC": auc_by_class[7],
-        "epoch": epoch
-        })
-
         sched.step()
 
     model.load_state_dict(best_weights)
+    torch.save(model.state_dict(), f"{arg.condition}_best_weights.pth")
 
     return model
 
@@ -174,9 +177,13 @@ def main() -> None:
     test_ds = get_test_dataset()
 
     # Getting hyperparameters
-    optuna_condition = "TL" if use_TL else "SCRATCH"
-    study = optuna.load_study(study_name=optuna_condition,
-                              storage=f"sqlite:///optuna_{optuna_condition}.db")
+    if use_TL:
+        study = optuna.load_study(study_name="TL",
+                                  storage=f"sqlite:///optuna_TL.db")
+
+    else:
+        study = optuna.load_study(study_name="SCRATCH_DO_v2",
+                              storage=f"sqlite:///optuna_SCRATCH_dropout_v2.db")
     best_params = study.best_params
 
     # Dataloader
@@ -184,40 +191,60 @@ def main() -> None:
                                         batch_size = best_params["batch_size"],
                                         seed=SEED,
                                         use_equilibration = use_EM,
-                                        num_workers=4)
+                                        num_workers=2)
     test_load = DataLoader(test_ds,
                            batch_size=best_params["batch_size"],
                            shuffle=False,
-                           num_workers=4)
+                           num_workers=2)
     
     # Instantiating the Model
-    model = SkinEffnetB5(pretrained = use_TL, use_metablock = use_META, feature_extract = use_feat_ext)
+    dropout_p = 0.0 if use_TL else 0.5
+    model = SkinEffnetB4(pretrained = use_TL, use_metablock = use_META, feature_extract = use_feat_ext, dropout_p=dropout_p)
     
     # Initializing W&B
-    wandb.init(project="ds6050-g03-ISIC2019", name=arg.condition)
+    wandb.init(project="ds6050-g03-ISIC2019-Experiments", name=arg.condition)
+
+    wandb.config.update({
+    "lr": best_params["lr"],
+    "weight_decay": best_params["weight_decay"],
+    "scheduler": best_params["scheduler"],
+    "batch_size": best_params["batch_size"],
+    "use_TL": use_TL,
+    "use_EM": use_EM,
+    "use_META": use_META,
+    "condition": arg.condition,
+    'dropout_p': dropout_p
+    })
 
     # Training
     model = train_model(device, model, train_load, val_load, 
                         lr=best_params["lr"], weight_decay=best_params["weight_decay"], 
-                        scheduler=best_params["scheduler"])
+                        scheduler=best_params["scheduler"],
+                        num_epochs=30)
     
     # Testing
     criterion = nn.CrossEntropyLoss()
-    test_loss, test_recall, test_auc = evaluate(model, test_load, criterion, device, use_META=use_META)
+    test_loss, test_recall, test_auc, test_preds, test_labs = evaluate(model, test_load, criterion, device, use_META=use_META)
 
     # Logging metrics
     wandb.log({
         "test_loss": test_loss,
         "test_recall": test_recall,
         "test_mean_auc": test_auc.mean(),
-        "auc_class_0_MEL": test_auc[0],
-        "auc_class_1_NV": test_auc[1],
-        "auc_class_2_BCC": test_auc[2],
-        "auc_class_3_AK": test_auc[3],
-        "auc_class_4_BKL": test_auc[4],
-        "auc_class_5_DF": test_auc[5],
-        "auc_class_6_VASC": test_auc[6],
-        "auc_class_7_SCC": test_auc[7]
+        "test_auc_class_0_MEL": test_auc[0],
+        "test_auc_class_1_NV": test_auc[1],
+        "test_auc_class_2_BCC": test_auc[2],
+        "test_auc_class_3_AK": test_auc[3],
+        "test_auc_class_4_BKL": test_auc[4],
+        "test_auc_class_5_DF": test_auc[5],
+        "test_auc_class_6_VASC": test_auc[6],
+        "test_auc_class_7_SCC": test_auc[7],
+        "confusion_matrix": wandb.plot.confusion_matrix(
+            probs=None,
+            y_true=test_labs,
+            preds=test_preds,
+            class_names=["MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC"]
+        )
     })
 
     # Closing W&B

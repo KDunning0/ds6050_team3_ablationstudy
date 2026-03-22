@@ -35,7 +35,7 @@ Two baseline models have been trained and evaluated on the ISIC 2019 test set (U
 
 | Model | Val MAR | Test MAR | Early Stopping |
 |---|---|---|---|
-| B4 Scratch | 0.515 | 0.377 | Not triggered (30 epochs) |
+| B4 Scratch (dropout=0.5) | 0.515 | 0.377 | Not triggered (30 epochs) |
 | B4 Transfer Learning | 0.784 | 0.549 | Epoch 22 (best weights from epoch 12) |
 
 Transfer learning improves test macro recall by 45% over the scratch baseline. The scratch model exhibits severe overfitting (train loss → 0.1, val loss → 1.4), while the TL model shows moderate overfitting mitigated by pretrained weight stability. Per-class recall improvements from TL are most dramatic for rare classes: DF (0.15 → 0.40), BKL (0.24 → 0.51), SCC (0.24 → 0.43), VASC (0.23 → 0.39).
@@ -69,7 +69,7 @@ Download the following files manually from https://challenge.isic-archive.com/da
 | `challenge-2019-training_metadata.csv` | `data/train/` | [Collection 65 API](https://api.isic-archive.com/collections/65/) → Actions → Download Metadata |
 | `challenge-2019-test_metadata.csv` | `data/test/` | [Collection 72 API](https://api.isic-archive.com/collections/72/) → Actions → Download Metadata |
 
-### Expected directory structure
+### Expected data directory structure
 
 ```
 data/
@@ -89,17 +89,22 @@ data/
 
 ```
 ds6050_team3_ablationstudy/
-├── current code files/
-│   ├── isic2019_dataset.py          # Dataset class: image loading, metadata encoding, train/test splits
-│   ├── equilibration_sampler.py     # EM sampler: class-balanced mini-batch construction
-│   ├── metablock.py                 # MetaBlock: metadata-driven feature map modulation
-│   ├── model.py                     # SkinEffnetB4: EfficientNet-B4 with optional MetaBlock and transfer learning
-│   ├── dataloader.py                # DataLoader construction with optional EM sampling
-│   ├── runner.py                    # Main training/evaluation script (CLI-driven experiment configs)
-│   ├── tune_params.py               # Optuna hyperparameter optimization (with AMP mixed precision)
-│   ├── data_investigation.ipynb     # Exploratory data analysis
-│   ├── confusion_matrices.ipynb     # Confusion matrix generation and visualization
-│   └── test_em_sampler.ipynb        # EM sampler verification tests
+├── Code/
+│   ├── isic2019_dataset.py              # Dataset class: image loading, metadata encoding, train/test splits
+│   ├── equilibration_sampler.py         # EM sampler: class-balanced mini-batch construction
+│   ├── metablock.py                     # MetaBlock: metadata-driven feature map modulation
+│   ├── model.py                         # SkinEffnetB4: EfficientNet-B4 with optional MetaBlock and transfer learning
+│   ├── dataloader.py                    # DataLoader construction with optional EM sampling
+│   ├── runner.py                        # Main training/evaluation script (CLI-driven experiment configs)
+│   ├── tune_params-4workers-dropout.py  # Optuna hyperparameter optimization (with AMP mixed precision)
+│   ├── check_model_size.py              # Parameter count summary for all model variants
+│   ├── data_investigation_v2.ipynb      # Exploratory data analysis and metadata completeness
+│   ├── EM Batch Exploration/            # EM sampler verification tests and analysis
+│   ├── Model Size Info/                 # Model parameter summaries
+│   └── Optuna Database Files/           # Optuna SQLite databases from hyperparameter tuning
+│       ├── optuna_TL.db
+│       ├── optuna_SCRATCH.db
+│       └── optuna_SCRATCH_dropout_v2.db
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -145,10 +150,13 @@ python runner.py -c TL_META           # TL + MetaBlock
 python runner.py -c TL_EM_META        # TL + EM + MetaBlock
 ```
 
-Loads best hyperparameters from a pre-computed Optuna SQLite database, trains with early stopping (patience=10 on validation macro recall), saves best model weights to disk, and logs all metrics including a test-set confusion matrix to Weights & Biases.
+Loads best hyperparameters from pre-computed Optuna SQLite databases (TL track from `optuna_TL.db`, scratch track from `optuna_SCRATCH_dropout_v2.db`). Trains with early stopping (patience=10 on validation macro recall), saves best model weights to disk, and logs all metrics including a test-set confusion matrix to Weights & Biases. Scratch models use dropout=0.5 on the final FC layer; TL models use no dropout.
 
-### `tune_params.py`
-Optuna hyperparameter search over learning rate (1e-5 to 1e-2, log scale), weight decay (1e-5 to 1e-2, log scale), batch size ({16, 24, 32, 48, 64}), and LR scheduler (cosine vs. step with step_size=10). Runs 40 trials with median pruning after 5 warmup epochs. Uses mixed precision training (AMP) with `GradScaler` to reduce VRAM usage. Includes memory management (explicit `gc.collect()` and `torch.cuda.empty_cache()` between trials) and catches OOM errors gracefully. Saves results to SQLite databases (`optuna_TL.db`, `optuna_SCRATCH.db`) for retrieval by `runner.py`.
+### `tune_params-4workers-dropout.py`
+Optuna hyperparameter search over learning rate (1e-5 to 1e-2, log scale), weight decay (1e-5 to 1e-2, log scale), batch size ({16, 24, 32, 48, 64}), and LR scheduler (cosine vs. step with step_size=10). Runs 40 trials with median pruning after 5 warmup epochs. Uses mixed precision training (AMP) with `GradScaler` to reduce VRAM usage. Includes memory management (explicit `gc.collect()` and `torch.cuda.empty_cache()` between trials) and catches OOM errors gracefully. Scratch models are tuned with dropout=0.5; TL models with dropout=0.0.
+
+### `check_model_size.py`
+Generates a detailed parameter summary for all four model variants (TL, scratch, TL+MetaBlock, scratch+MetaBlock), including per-layer output shapes, parameter counts, and trainable parameter counts. Output is saved to `model_parameter_summary.txt`.
 
 ## Running on Rivanna
 
@@ -163,24 +171,24 @@ This project runs on UVA's Rivanna HPC cluster. Request A100 GPUs for reliable e
 
 1. **Hyperparameter tuning** (once per track):
    ```bash
-   python tune_params.py -c TL        # Tunes for transfer learning track
-   python tune_params.py -c SCRATCH   # Tunes for scratch track
+   python tune_params-4workers-dropout.py -c TL
+   python tune_params-4workers-dropout.py -c SCRATCH
    ```
 
 2. **Baseline training** (Milestone 2):
    ```bash
-   python runner.py -c TL             # Transfer learning baseline
-   python runner.py -c SCRATCH        # Scratch baseline
+   python runner.py -c TL
+   python runner.py -c SCRATCH
    ```
 
 3. **Ablation experiments** (Milestone 3):
    ```bash
-   python runner.py -c TL_EM          # TL + EM sampling
-   python runner.py -c TL_META        # TL + MetaBlock
-   python runner.py -c TL_EM_META     # TL + EM + MetaBlock
-   python runner.py -c EM             # Scratch + EM
-   python runner.py -c META           # Scratch + MetaBlock
-   python runner.py -c EM_META        # Scratch + EM + MetaBlock
+   python runner.py -c TL_EM
+   python runner.py -c TL_META
+   python runner.py -c TL_EM_META
+   python runner.py -c EM
+   python runner.py -c META
+   python runner.py -c EM_META
    ```
 
 ## Dependencies
