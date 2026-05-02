@@ -214,7 +214,7 @@ def main() -> None:
     model = SkinEffnetB4(pretrained = use_TL, use_metablock = use_META, feature_extract = use_feat_ext, dropout_p=dropout_p)
     
     # Initializing W&B
-    wandb.init(project="ds6050-g03-ISIC2019-Experiments", name=arg.condition)
+    wandb.init(project="ds6050_ablation_experiments", name=arg.condition)
 
     wandb.config.update({
     "lr": best_params["lr"],

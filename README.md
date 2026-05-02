@@ -49,7 +49,7 @@ The original project proposal considered EfficientNet-B5. During implementation,
 - The final runner uses PyTorch AMP mixed precision through `autocast` and `GradScaler`.
 - Experiments train for up to 30 epochs with early stopping on validation MAR.
 - Best checkpoints are saved as `{condition}_best_weights.pth`.
-- Metrics and confusion matrices are logged to Weights & Biases under the `ds6050-g03-ISIC2019-Experiments` project.
+- Metrics and confusion matrices are logged to Weights & Biases under the `ds6050_ablation_experiments` project.
 
 The final report contains the complete results table, interaction analysis, and MetaBlock coefficient visualization. The MetaBlock visualization inspects the learned scale (`f_b`) and shift (`g_b`) coefficients across feature-map groups for the four MetaBlock conditions.
 
