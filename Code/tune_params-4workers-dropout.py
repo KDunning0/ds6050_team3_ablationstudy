@@ -24,8 +24,8 @@ import gc
 # %%
 # We're going to use these as switches to call slurm for parallelization.
 ap = argparse.ArgumentParser()
-ap.add_argument("-c", "--condition", 
-                required=True, 
+ap.add_argument("-c", "--condition",
+                required=True,
                 type=str,
                 help='''
                 The condition to train on.
@@ -45,13 +45,13 @@ use_feat_ext = "FEAT" in arg.condition
 
 # %% [markdown]
 # #### Examples for slurm call:
-# 
+#
 # Transfer learning and nothing else:
-# 
+#
 # python tune_params.py -c TL
-# 
+#
 # Base with EM and Meta:
-# 
+#
 # python tune_params.py -c EM_META
 
 # %%
@@ -70,14 +70,14 @@ def objective(trial):
 
     # instantiating WandB
     track = "TL" if use_TL else "SCRATCH"
-    project_name = "ds6050_b4_baseline_tune_dropout_SCRATCH" if not use_TL else "ds6050_b4_baseline_tune_dropout_TL"
-    wandb.init(entity="ds6050_team3", project=project_name, name=f"{track}_trial_{trial.number}", reinit='finish_previous')
+    wandb.init(entity = "ds6050_team3", project="ds6050_b4_baseline_tune_dropout_SCRATCH", name = f"{track}_trial_{trial.number}", reinit = 'finish_previous')
 
     # We're calling in the model as shown in the pytorch_simple tutorial file but modified for our model.
     # The arguments are inputted for argparse and are controlled in the slurm calls.
-    dropout_p = 0.5 if not use_TL else 0.0
-    model = SkinEffnetB4(pretrained=use_TL, use_metablock=use_META, 
-                     dropout_p=dropout_p, feature_extract=use_feat_ext).to(DEVICE)
+    if use_TL is False:
+        model = SkinEffnetB4(pretrained=use_TL, use_metablock=use_META, dropout_p = 0.5, feature_extract=use_feat_ext).to(DEVICE)
+    else:
+        model = SkinEffnetB4(pretrained=use_TL, use_metablock=use_META, feature_extract=use_feat_ext).to(DEVICE)
 
     # Setting up the parameters we want to know about with reasonable ranges.
     # Learning rates usually pretty tiny for the skin data.
@@ -103,7 +103,7 @@ def objective(trial):
     batch_size = trial.suggest_categorical("batch_size", [16, 24, 32, 48, 64])
 
     # This can be changed when we have the dataloader file.
-    train_load, valid_load = make_loaders(base_ds, train_idx, val_idx, 
+    train_load, valid_load = make_loaders(base_ds, train_idx, val_idx,
                                           batch_size=batch_size, seed=SEED,
                                           use_equilibration = use_EM, num_workers=4)
 
@@ -112,10 +112,9 @@ def objective(trial):
         "lr": lr,
         "weight_decay": wc,
         "scheduler": scheduler,
-        "batch_size": batch_size,
-        "dropout_p": dropout_p
+        "batch_size": batch_size
     })
-    
+
     # Doing the training:
     for epoch in range(EPOCHS):
         model.train()
@@ -182,8 +181,8 @@ def objective(trial):
         # before sklearn sees the data, catching any remaining floating point drift.
         probs_np = probs_np / probs_np.sum(axis=1, keepdims=True)
         auc_by_class = roc_auc_score(labs, probs_np, multi_class='ovr', average=None)
-        
-        # This is basically balanced accuracy.        
+
+        # This is basically balanced accuracy.
         m_recall = recall_score(labs, preds, average='macro')
 
         # Logging to Weights and Biases
@@ -213,7 +212,7 @@ def objective(trial):
             gc.collect()
             torch.cuda.empty_cache()
             raise optuna.TrialPruned()
-        
+
     wandb.finish()
     del model, optimizer, sched, train_load, valid_load, scaler
     gc.collect()
@@ -229,15 +228,15 @@ if __name__ == "__main__":
         study = optuna.create_study(study_name="TL_DO",
                                 pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
                                 storage=f"sqlite:///optuna_TL_dropout.db",
-                                load_if_exists=True, 
+                                load_if_exists=True,
                                 direction="maximize")
     else:
         study = optuna.create_study(study_name="SCRATCH_DO",
                                 pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
                                 storage=f"sqlite:///optuna_SCRATCH_dropout.db",
-                                load_if_exists=True, 
+                                load_if_exists=True,
                                 direction="maximize")
-        
+
     study.optimize(objective, n_trials=40, catch=(torch.OutOfMemoryError, ValueError))
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
@@ -259,12 +258,12 @@ if __name__ == "__main__":
 
 # %%
 # Extra Citations
-# 1. Mbambo, T. (n.d.). Argparse tutorial. Python documentation. https://docs.python.org/3/howto/argparse.html 
-# 2. Rosebrock, A. (2018, March 12). Python argparse, and command line arguments. 
-# PyImageSearch. https://pyimagesearch.com/2018/03/12/python-argparse-command-line-arguments/ 
-# 3. Ramos, L. (n.d.). Build command-line interfaces with python's argparse. 
-# Real Python. https://realpython.com/command-line-interfaces-python-argparse/ 
-# 4. Optuna Contributors. (2018). Tutorial. Tutorial - Optuna 4.7.0 documentation. 
-# https://optuna.readthedocs.io/en/stable/tutorial/index.html 
-# 5. Wadekar, S. (2021, January 19). Optuna: Hyperparameter optimization in pytorch . 
+# 1. Mbambo, T. (n.d.). Argparse tutorial. Python documentation. https://docs.python.org/3/howto/argparse.html
+# 2. Rosebrock, A. (2018, March 12). Python argparse, and command line arguments.
+# PyImageSearch. https://pyimagesearch.com/2018/03/12/python-argparse-command-line-arguments/
+# 3. Ramos, L. (n.d.). Build command-line interfaces with python's argparse.
+# Real Python. https://realpython.com/command-line-interfaces-python-argparse/
+# 4. Optuna Contributors. (2018). Tutorial. Tutorial - Optuna 4.7.0 documentation.
+# https://optuna.readthedocs.io/en/stable/tutorial/index.html
+# 5. Wadekar, S. (2021, January 19). Optuna: Hyperparameter optimization in pytorch .
 # Medium. https://medium.com/swlh/optuna-hyperparameter-optimization-in-pytorch-9ab5a5a39e77

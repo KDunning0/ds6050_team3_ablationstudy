@@ -1,5 +1,5 @@
 """
-isic2019_dataset_v3.py
+isic2019_dataset.py
 --------------------
 Data loading and preprocessing for the ISIC 2019 skin lesion dataset.
 
@@ -277,7 +277,7 @@ class ISICSkinDataset(Dataset):
             Has no effect if transform is provided explicitly.
 
     Returns per __getitem__:
-        image: FloatTensor [3, 456, 456]
+        image: FloatTensor [3, 380, 380]
         label: int in [0, 7] — integer class index
         meta_data: FloatTensor [META_DIM=15] or None
         image_id: str — e.g. "ISIC_0024306"

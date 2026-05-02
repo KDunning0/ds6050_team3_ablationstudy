@@ -212,6 +212,12 @@ class EquilibrationSampler(Sampler):
         max_class_count   = max(len(v) for v in self._class_to_indices.values())
         self._num_batches = math.ceil(max_class_count / self.quota)
 
+        # Initialize RNG once so its state evolves across epochs, giving
+        # genuine epoch-to-epoch variation in batch composition. The seed
+        # controls the starting state for reproducibility but is not reset
+        # at the start of each epoch.
+        self._rng = random.Random(self.seed)
+
     # ------------------------------------------------------------------
     # Internal: build the full sequence of indices for one epoch
     # ------------------------------------------------------------------
@@ -222,11 +228,11 @@ class EquilibrationSampler(Sampler):
         during one epoch. Concretely, this means constructing self._num_batches
         balanced batches and concatenating their indices into a flat list.
 
-        Called once per epoch at the start of __iter__. Because it is called
-        fresh each time, the random draws (and therefore which specific major-
-        class samples appear in which batches) differ every epoch.
+        Called once per epoch at the start of __iter__. Because self._rng
+        is initialized once at construction and its state carries forward
+        across epochs, the random draws differ every epoch as intended.
         """
-        rng = random.Random(self.seed)
+        rng = self._rng
 
         # Make a fresh, optionally shuffled copy of each class's index pool
         # for this epoch. We copy so that the original self._class_to_indices

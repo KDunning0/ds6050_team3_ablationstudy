@@ -12,10 +12,11 @@ import optuna
 import argparse
 # This gives us the option of using recall score instead of accuracy.
 from sklearn.metrics import recall_score, roc_auc_score
+from sklearn.utils.class_weight import compute_class_weight
 import wandb
 import copy
 
-# IMPORTANT: Download the dataset via the instructions in isic2019_dataset.py before running runner.py.
+# IMPORTANT: Download the dataset via the instructions in isic2019_dataset.py before running runner_AMP.py.
 
 # We're going to use these as switches to call slurm for parallelization.
 ap = argparse.ArgumentParser()
@@ -36,6 +37,7 @@ use_TL = "TL" in arg.condition
 use_EM = "EM" in arg.condition
 use_META = "META" in arg.condition
 use_feat_ext = "FEAT" in arg.condition
+use_inv_CE = "INV" in arg.condition
 
 def evaluate(model, dataloader, criterion, device, use_META = use_META):
     """Evaluate the model."""
@@ -50,20 +52,22 @@ def evaluate(model, dataloader, criterion, device, use_META = use_META):
             data, target = data.to(device), target.to(device)
             if meta_data is not None:
                 meta_data = meta_data.to(device)
-            output = model(data, meta_data) if use_META else model(data)
-
-            loss = criterion(output, target)
+            with torch.amp.autocast('cuda'):
+                output = model(data, meta_data) if use_META else model(data)
+                loss = criterion(output, target)
             running_loss += loss.item()
             
             # Removed keep dim for argmax.
             pred = output.argmax(dim=1)
-            prob = F.softmax(output, dim=1)
+            prob = F.softmax(output, dim=1).float()
+            prob = prob / prob.sum(dim=1, keepdim=True)
             preds.extend(pred.cpu().numpy())
             probs.extend(prob.cpu().numpy())
             labs.extend(target.cpu().numpy())
 
     # Calculating ROC AUC
     probs_np = np.array(probs)
+    probs_np = probs_np / probs_np.sum(axis=1, keepdims=True)
     auc_by_class = roc_auc_score(labs, probs_np, multi_class='ovr', average=None)
         
     # This is basically balanced accuracy.        
@@ -79,7 +83,7 @@ def _set_bn_eval(m):
         m.eval()
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, feature_extract = use_feat_ext, use_META = use_META):
+def train_epoch(model, dataloader, criterion, optimizer, scaler,device, feature_extract = use_feat_ext, use_META = use_META):
     """Train the model for one epoch."""
     model.train()
     if feature_extract:
@@ -92,10 +96,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device, feature_extract
             meta_data = meta_data.to(device)
 
         optimizer.zero_grad()
-        outputs = model(data, meta_data) if use_META else model(data)
-        loss = criterion(outputs, target)
-        loss.backward()
-        optimizer.step()
+        with torch.amp.autocast('cuda'):
+            outputs = model(data, meta_data) if use_META else model(data)
+            loss = criterion(outputs, target)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         running_loss += loss.item()
 
@@ -104,7 +110,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, feature_extract
 
 
 def train_model(device, model, train_loader, val_loader, lr, weight_decay, 
-                scheduler, num_epochs=30, feature_extract = use_feat_ext, use_META = use_META):
+                scheduler, num_epochs=30, feature_extract = use_feat_ext, use_META = use_META, class_weights = None):
     """
     Train and evaluate a model.
 
@@ -112,8 +118,9 @@ def train_model(device, model, train_loader, val_loader, lr, weight_decay,
         the model
     """
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight = class_weights)
     optimizer = optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr)
+    scaler = torch.amp.GradScaler('cuda')
     if scheduler == "cosine":
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_epochs)
     else:
@@ -130,7 +137,7 @@ def train_model(device, model, train_loader, val_loader, lr, weight_decay,
     for epoch in range(num_epochs):
 
         train_loss = train_epoch(
-            model, train_loader, criterion, optimizer, device, feature_extract = use_feat_ext, use_META = use_META
+            model, train_loader, criterion, optimizer, scaler, device, feature_extract = use_feat_ext, use_META = use_META
         )
         epoch_loss, m_recall, auc_by_class, _, _ = evaluate(model, val_loader, criterion, device, use_META=use_META)
 
@@ -182,8 +189,8 @@ def main() -> None:
                                   storage=f"sqlite:///optuna_TL.db")
 
     else:
-        study = optuna.load_study(study_name="SCRATCH_DO_v2",
-                              storage=f"sqlite:///optuna_SCRATCH_dropout_v2.db")
+        study = optuna.load_study(study_name="SCRATCH_DO",
+                              storage=f"sqlite:///optuna_SCRATCH_dropout.db")
     best_params = study.best_params
 
     # Dataloader
@@ -191,11 +198,16 @@ def main() -> None:
                                         batch_size = best_params["batch_size"],
                                         seed=SEED,
                                         use_equilibration = use_EM,
-                                        num_workers=2)
+                                        num_workers=4)
     test_load = DataLoader(test_ds,
                            batch_size=best_params["batch_size"],
                            shuffle=False,
-                           num_workers=2)
+                           num_workers=4)
+    
+    # Adding inverse cross entropy for supplementary Ablation.
+    train_lab = [base_ds.samples[i][1] for i in train_idx]
+    class_weights = compute_class_weight('balanced', classes=np.arange(8), y=train_lab)
+    class_weights_tens = torch.tensor(class_weights).float().to(device) if use_inv_CE else None
     
     # Instantiating the Model
     dropout_p = 0.0 if use_TL else 0.5
@@ -212,6 +224,7 @@ def main() -> None:
     "use_TL": use_TL,
     "use_EM": use_EM,
     "use_META": use_META,
+    "use_inv_CE": use_inv_CE,
     "condition": arg.condition,
     'dropout_p': dropout_p
     })
@@ -220,7 +233,8 @@ def main() -> None:
     model = train_model(device, model, train_load, val_load, 
                         lr=best_params["lr"], weight_decay=best_params["weight_decay"], 
                         scheduler=best_params["scheduler"],
-                        num_epochs=30)
+                        num_epochs=30,
+                        class_weights=class_weights_tens)
     
     # Testing
     criterion = nn.CrossEntropyLoss()

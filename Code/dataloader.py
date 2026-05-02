@@ -1,5 +1,5 @@
 """
-dataloader_v3.py
+dataloader.py
 --------------
 Constructs train and validation DataLoaders for ISIC 2019 using
 ISICSkinDataset and optionally the EquilibrationSampler.
@@ -213,4 +213,4 @@ def make_loaders(
 
     return train_loader, val_loader
 
-    
+

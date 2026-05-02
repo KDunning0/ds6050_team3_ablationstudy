@@ -46,6 +46,7 @@ The original project proposal considered EfficientNet-B5. During implementation,
 - MetaBlock reshapes those features into 32 metadata-controlled feature groups.
 - Metadata is represented as a 15-dimensional vector covering age, sex, and anatomical site, including explicit unknown categories.
 - Transfer-learning runs use dropout `0.0`; scratch runs use dropout `0.5`.
+- The final runner uses PyTorch AMP mixed precision through `autocast` and `GradScaler`.
 - Experiments train for up to 30 epochs with early stopping on validation MAR.
 - Best checkpoints are saved as `{condition}_best_weights.pth`.
 - Metrics and confusion matrices are logged to Weights & Biases under the `ds6050-g03-ISIC2019-Experiments` project.
@@ -109,13 +110,11 @@ ds6050_team3_ablationstudy/
 │   ├── metablock.py
 │   ├── model.py
 │   ├── dataloader.py
-│   ├── runner.py
+│   ├── runner_AMP.py
 │   ├── tune_params-4workers-dropout.py
-│   ├── check_model_size.py
-│   ├── data_investigation_v2.ipynb
 │   ├── EM Batch Exploration/
 │   ├── Model Size Info/
-│   └── Optuna Database Files/
+│   └── DB Files/
 ├── LICENSE
 └── README.md
 ```
@@ -147,9 +146,9 @@ Defines `SkinEffnetB4`, an EfficientNet-B4 model with optional transfer learning
 
 Builds train and validation data loaders using either standard shuffled sampling or EM sampling. It uses a reproducible train/validation split and applies the appropriate image transforms.
 
-### `runner.py`
+### `runner_AMP.py`
 
-Main experiment runner. It parses the condition name, loads the matching Optuna study, builds the model and data loaders, trains with early stopping, evaluates on the test set, saves best weights, and logs metrics to Weights & Biases.
+Final experiment runner. It parses the condition name, loads the matching Optuna study, builds the model and data loaders, trains with AMP mixed precision and early stopping, evaluates on the test set, saves best weights, and logs metrics to Weights & Biases. It also supports the supplementary `TL_INV` inverse-frequency-weighted cross-entropy condition.
 
 ### `tune_params-4workers-dropout.py`
 
@@ -166,19 +165,20 @@ cd Code
 Scratch track:
 
 ```bash
-python runner.py -c SCRATCH
-python runner.py -c SCRATCH_EM
-python runner.py -c SCRATCH_META
-python runner.py -c SCRATCH_EM_META
+python runner_AMP.py -c SCRATCH
+python runner_AMP.py -c SCRATCH_EM
+python runner_AMP.py -c SCRATCH_META
+python runner_AMP.py -c SCRATCH_EM_META
 ```
 
 Transfer-learning track:
 
 ```bash
-python runner.py -c TL
-python runner.py -c TL_EM
-python runner.py -c TL_META
-python runner.py -c TL_EM_META
+python runner_AMP.py -c TL
+python runner_AMP.py -c TL_EM
+python runner_AMP.py -c TL_META
+python runner_AMP.py -c TL_EM_META
+python runner_AMP.py -c TL_INV
 ```
 
 The runner determines active features by checking the condition string:
@@ -187,6 +187,7 @@ The runner determines active features by checking the condition string:
 - `EM` enables equilibration mini-batch sampling.
 - `META` enables MetaBlock metadata fusion.
 - `FEAT` enables frozen-backbone feature extraction if included.
+- `INV` enables inverse-frequency-weighted cross entropy.
 
 ## Optuna Databases
 
@@ -195,9 +196,9 @@ The runner expects Optuna SQLite databases to be available in the working direct
 | Track | Study name | Database |
 |---|---|---|
 | Transfer learning | `TL` | `optuna_TL.db` |
-| Scratch | `SCRATCH_DO_v2` | `optuna_SCRATCH_dropout_v2.db` |
+| Scratch | `SCRATCH_DO` | `optuna_SCRATCH_dropout.db` |
 
-The repository includes the tuning databases under `Code/Optuna Database Files/`. Copy or symlink the needed `.db` files into `Code/` before running `runner.py`, or update the database paths in the runner.
+The repository includes the tuning databases under `Code/DB Files/`. Copy or symlink the needed `.db` files into `Code/` before running `runner_AMP.py`, or update the database paths in the runner.
 
 ## Running on Rivanna
 
