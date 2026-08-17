@@ -4,7 +4,8 @@
 
 Claire Dozier, Katie Dunning, Michael Ieraci, Emma Polson
 
-To access the paper, please request access at: https://drive.google.com/file/d/1CODA0akJ9Dojkb0fOyNC515OwBuChtIb/view?usp=sharing
+**To access the paper, please request access at: https://drive.google.com/file/d/1CODA0akJ9Dojkb0fOyNC515OwBuChtIb/view?usp=sharing**
+
 ---
 
 ## Overview
